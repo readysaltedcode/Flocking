@@ -372,6 +372,53 @@ var fluid = fluid || require("infusion"),
         }
     });
     
+    // Represents a trigger from some external (i.e. non-ugen graph) source.
+    // Whenever it receives a change to its "msg" input, this trigger will fire.
+    flock.ugen.msgTrigger = function (inputs, output, options) {
+        var that = flock.ugen(inputs, output, options);
+        
+        // Only runs at control rate or lower.
+        that.gen = function (numSamps) {
+            var m = that.model,
+                inputs = that.inputs,
+                out = that.output;
+            
+            if (m.shouldFire) {
+                out[0] = 1.0;
+                inputs.msg.fire = m.shouldFire = false;
+            } else {
+                out[0] = 0.0;
+            }
+        };
+        
+        // Call this method to fire the trigger.
+        // Note that in the future you will not be able to call this directly,
+        // so the API will change.
+        that.onInputChanged = function (inputName) {
+            if ((!inputName || inputName === "msg") && that.inputs.msg.fire === true) {
+                that.model.shouldFire = true;
+            }
+        };
+        
+        return that;
+    };
+    
+    fluid.defaults("flock.ugen.msgTrigger", {
+        rate: "control",
+        
+        inputs: {
+            msg: {
+                fire: false
+            }
+        },
+        
+        ugenOptions: {
+            model: {
+                shouldFire: false
+            }
+        }
+    });
+    
     flock.ugen.math = function (inputs, output, options) {
         var that = flock.ugen(inputs, output, options);
         that.expandedSource = new Float32Array(that.options.audioSettings.blockSize);
