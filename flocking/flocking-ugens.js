@@ -1322,6 +1322,126 @@ var fluid = fluid || require("infusion"),
         }
     });
 
+    flock.ugen.writeBuffer = function (inputs, output, options) {
+        var that = flock.ugen(inputs, output, options);
+
+        that.gen = function (numSamps) {
+            var m = that.model,
+                out = that.output,
+                inputs = that.inputs,
+                sources = that.multiInputs.sources,
+                bufferDesc = that.bufferDesc,
+                numInputChans = sources.length,
+                numBufferChans = that.buffer.format.numChannels,
+                startSampleIdx = inputs.start.output[0],
+                lastWriteIdx = m.lastWriteIdx,
+                loop = inputs.loop.output[0],
+                chan = inputs.channel.output[0],
+                expand = inputs.expand.output[0],
+                currentInputChan = chan,
+                i,
+                inputChannel,
+                bufferChannel,
+                outputChannel,
+                j,
+                samp,
+                k;
+
+            if (m.prevStart !== startSampleIdx) {
+                m.prevStart = startSampleIdx;
+                lastWriteIdx = (startSampleIdx | 0) - 1;
+            }
+
+            for (i = 0; i < expand; i++) {
+                while (currentInputChan < numInputChans && currentInputChan < numBufferChans) {
+                    inputChannel = sources[i];
+                    bufferChannel = that.bufferDesc.data.channels[currentInputChan];
+                    outputChannel = out[i];
+
+                    for (j = 0, k = lastWriteIdx; j < numSamps; j++, k++) {
+                        samp = inputChannel[j];
+                        outputChannel[j] = samp;
+                        if (j < bufferDesc.format.numSampleFrames) {
+                            bufferChannel[k] = samp;
+                        } else if (loop > 0){
+                            k = lastWriteIdx = (startSampleIdx | 0);
+                            bufferChannel[k] = samp;
+                        }
+                    }
+
+                    currentInputChan++;
+                }
+            }
+
+            m.lastWriteIdx += numSamps;
+            that.mulAdd(numSamps);
+        };
+
+        that.createBuffer = function (bufDef) {
+            var o = that.options,
+                channels = [],
+                duration = Math.round(o.bufferDuration * o.audioSettings.rates.audio),
+                i;
+
+            for (i = 0; i < that.multiInputs.sources.length; i++) {
+                channels.push(new Float32Array(duration));
+            }
+
+            that.bufferDesc = flock.parse.expandBufferDef(channels);
+
+            if (bufDef.id) {
+                o.audioSettings.buffers[bufDef.id] = that.bufferDesc;
+            }
+        };
+
+        that.onInputChanged = function (inputName) {
+            if (!inputName) {
+                that.collectMultiInputs();
+                that.createBuffer(that.inputs.buffer);
+            } else if (inputName === "sources") {
+                that.collectMultiInputs();
+            } else if (inputName === "buffer") {
+                that.createBuffer(that.inputs.buffer);
+            }
+
+            flock.onMulAddInputChanged(that);
+        };
+
+        that.init = function () {
+            that.onInputChanged();
+        };
+
+        that.init();
+
+        return that;
+    };
+
+    fluid.defaults("flock.ugen.writeBuffer", {
+        rate: "audio",
+
+        inputs: {
+            sources: null,
+            buffer: null,
+            start: 0,
+            loop: 0,
+            channel: 0,
+            expand: 1
+        },
+
+        ugenOptions: {
+            model: {
+                prevStart: undefined,
+                lastWriteIdx: 0
+            },
+
+            tags: ["flock.ugen.multiChannelOutput"],
+            numOutputs: 2, // TODO: This hardcodes the number of outputs when it should be sources.length.
+            multiInputNames: ["sources"],
+            bufferDuration: 360 // In seconds. Default is 10 minutes.
+        }
+    });
+
+
     /**
      * Outputs the duration of the specified buffer. Runs at either constant or control rate.
      * Use control rate only when the underlying buffer may change dynamically.
@@ -2301,7 +2421,6 @@ var fluid = fluid || require("infusion"),
         };
 
         that.init = function () {
-            that.sourceBuffers = [];
             that.onInputChanged();
         };
 
